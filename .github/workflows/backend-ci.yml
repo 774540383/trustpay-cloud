@@ -1,0 +1,67 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths: ["backend/**"]
+  pull_request:
+    branches: [main]
+    paths: ["backend/**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: trustpay_test
+          POSTGRES_USER: trustpay
+          POSTGRES_PASSWORD: trustpay_pass
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Lint with ruff
+        working-directory: backend
+        run: |
+          pip install ruff
+          ruff check app/ --ignore E501
+
+      - name: Run unit tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://trustpay:trustpay_pass@localhost:5432/trustpay_test
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET_KEY: test-secret-key-for-ci-must-be-at-least-64-characters-long-padded
+          APP_ENV: testing
+          ADMIN_EMAIL: admin@test.local
+          ADMIN_PASSWORD: Admin@Test123!
+        run: pytest tests/unit/ -v --cov=app --cov-report=xml
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t trustpay-backend:${{ github.sha }} ./backend
