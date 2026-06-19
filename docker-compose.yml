@@ -1,10 +1,63 @@
+version: "3.9"
+
 services:
-  trustpay:
-    build: .
-    container_name: trustpay_kyc
+  postgres:
+    image: postgres:16-alpine
+    container_name: trustpay_postgres
     restart: unless-stopped
-    env_file: .env
+    environment:
+      POSTGRES_DB: trustpay_db
+      POSTGRES_USER: trustpay
+      POSTGRES_PASSWORD: trustpay_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trustpay -d trustpay_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: trustpay_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trustpay_backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://trustpay:trustpay_pass@postgres:5432/trustpay_db
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
-      - ./data:/app/data
+      - ./backend:/app
+    command: >
+      sh -c "alembic upgrade head &&
+             python scripts/seed.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  postgres_data:
+  redis_data:
